@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+data/bookings_log.json
+.venv/
+.claude/
+
+# Contains a real Google Maps API key (mcp_config.json) and a Google
+# service-account private key (genial-union-*.json) -- never commit these.
+# The .example template stays tracked so others know the expected format.
+.agents/*
+!.agents/*.example

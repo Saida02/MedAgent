@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "gmail-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@shinzolabs/gmail-mcp"
+      ],
+      "env": {
+        "PORT": "0"
+      }
+    },
+    "google-sheets": {
+      "command": "uvx",
+      "args": [
+        "mcp-google-sheets"
+      ],
+      "env": {
+        "SERVICE_ACCOUNT_PATH": "./.agents/your-google-service-account.json"
+      }
+    },
+    "google-maps": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-google-maps"
+      ],
+      "env": {
+        "GOOGLE_MAPS_API_KEY": "YOUR_GOOGLE_MAPS_API_KEY"
+      }
+    }
+  }
+}
