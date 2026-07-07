@@ -1,5 +1,5 @@
 ---
-name: clinic_search_skill
+name: clinic-search-skill
 description: Step 3/7 of the healthcare appointment pipeline. Finds up to 10 nearest/most-relevant clinics via Google Maps MCP, with a location fallback chain.
 ---
 

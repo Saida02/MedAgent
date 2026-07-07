@@ -4,6 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>MedAgent — AI Appointment System</title>
+<link rel="icon" type="image/png" href="icon.png"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css"/>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
@@ -52,7 +53,7 @@
   .msg{display:flex;gap:10px;align-items:flex-start}
   .msg.user{flex-direction:row-reverse}
   .m-av{width:32px;height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
-  .msg.bot .m-av{background:linear-gradient(135deg,#185FA5,#0C447C);color:#fff}
+  .msg.bot .m-av{background:none;color:#fff}
   .msg.user .m-av{background:#185FA5;color:#fff}
   .m-inner{display:flex;flex-direction:column;gap:6px;max-width:420px}
   .msg.user .m-inner{align-items:flex-end}
@@ -142,34 +143,16 @@
 <!-- Top Nav -->
 <nav>
   <div class="logo">
-    <div class="logo-icon"><i class="ti ti-heart-rate-monitor"></i></div>
+    <img src="icon.png" alt="MedAgent" style="height:34px;width:auto;"/>
     MedAgent
   </div>
   <div class="nav-pill active">Chat</div>
-  <div class="nav-pill">Appointments</div>
-  <div class="nav-pill">Analytics</div>
-  <div class="nav-right">
-    <button class="nav-btn notif-dot"><i class="ti ti-bell"></i></button>
-    <button class="nav-btn"><i class="ti ti-settings"></i></button>
-    <div class="user-av">SM</div>
-  </div>
 </nav>
 
 <div class="layout">
 
   <!-- Sidebar -->
   <div class="sidebar">
-    <div style="padding:14px 16px 4px">
-      <div class="status-row"><div class="pulse"></div>Agent online · web chat only</div>
-    </div>
-
-    <div class="sidebar-section">Input channel</div>
-    <div class="s-item active"><i class="ti ti-message-circle"></i> Web chat <span class="s-badge" style="background:#185FA5">Only</span></div>
-
-    <div class="sidebar-section">Output (notifications)</div>
-    <div class="s-item"><i class="ti ti-device-mobile"></i> SMS · Twilio</div>
-    <div class="s-item"><i class="ti ti-mail"></i> Email · Gmail API</div>
-
     <div class="sidebar-section">Today's activity</div>
     <div class="s-item"><i class="ti ti-calendar-check" style="color:#22C55E"></i> Booked <span class="s-count" id="booked-total">4</span></div>
     <div class="s-item"><i class="ti ti-clock" style="color:#F59E0B"></i> Pending <span class="s-count" id="pending-total">2</span></div>
@@ -185,26 +168,14 @@
 
   <!-- Main chat -->
   <div class="main">
-    <div class="chat-header">
-      <div class="ch-av"><i class="ti ti-robot"></i></div>
-      <div>
-        <div class="ch-name">MedAgent Assistant</div>
-        <div class="ch-status">AI-powered · <span>Online</span> · intake → search → rate → book</div>
-      </div>
-      <div class="ch-actions">
-        <button class="ch-btn"><i class="ti ti-history"></i> History</button>
-        <button class="ch-btn"><i class="ti ti-share"></i> Channels</button>
-      </div>
-    </div>
-
     <div class="messages" id="msgs">
       <!-- Step 1: Intake — bot collects info -->
       <div class="msg bot">
-        <div class="m-av"><i class="ti ti-robot"></i></div>
+        <div class="m-av"><img src="icon.png" alt="" style="width:100%;height:100%;object-fit:contain;"/></div>
         <div class="m-inner">
           <div class="bubble">
             Hello! I'm MedAgent. To book an appointment I'll need a few details.<br><br>
-            Please tell me your <strong>first and last name</strong>, <strong>date of birth</strong>, <strong>symptoms</strong>, <strong>insurance provider</strong>, and <strong>location</strong>.
+            Please tell me your <strong>first and last name</strong>, <strong>date of birth</strong>, <strong>email</strong>, <strong>phone number</strong>, <strong>symptoms</strong>, <strong>insurance provider</strong>, and <strong>location</strong>.
           </div>
           <div class="m-time" id="welcome-time">09:41</div>
         </div>
@@ -212,7 +183,7 @@
 
       <!-- Typing indicator (hidden) -->
       <div class="msg bot" id="typing-msg" style="display:none">
-        <div class="m-av"><i class="ti ti-robot"></i></div>
+        <div class="m-av"><img src="icon.png" alt="" style="width:100%;height:100%;object-fit:contain;"/></div>
         <div class="typing"><span></span><span></span><span></span></div>
       </div>
     </div>
@@ -292,7 +263,7 @@
         <div class="step-num idle" id="s7">7</div>
         <div class="step-body">
           <div class="step-title">Confirmed</div>
-          <div class="step-sub" id="s7sub">SMS (Twilio) + email to patient</div>
+          <div class="step-sub" id="s7sub">SMS + email to patient</div>
         </div>
       </div>
 
@@ -322,6 +293,7 @@ let session = {
   intake: {
     name: null,
     age: null,
+    email: null,
     location: null,
     symptoms: null,
     severity: null,
@@ -346,6 +318,7 @@ let session = {
   // clinics at once (multi-select) instead of picking just one.
   selected_bookings: [],
   emails: [],
+  pending_clinic_questions: [],
   confirmation: {
     final_status: "pending",
     appointment_details: {
@@ -359,6 +332,15 @@ let session = {
 
 // Set initial time on welcome message
 document.getElementById('welcome-time').textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+// Real booked/pending counts from the booking log, instead of hardcoded placeholders.
+fetch('/api/stats')
+  .then(res => res.json())
+  .then(stats => {
+    ['booked-count', 'booked-total'].forEach(id => { document.getElementById(id).textContent = stats.booked; });
+    ['pending-count', 'pending-total'].forEach(id => { document.getElementById(id).textContent = stats.pending; });
+  })
+  .catch(err => console.error('Failed to load stats:', err));
 
 function updateStepsUI() {
   const step = session.current_step;
@@ -479,7 +461,7 @@ function updateStepsUI() {
   } else {
     s7.className = 'step-num idle';
     s7.textContent = '7';
-    document.getElementById('s7sub').textContent = 'SMS (Twilio) + email to patient';
+    document.getElementById('s7sub').textContent = 'SMS + email to patient';
   }
 }
 
@@ -520,7 +502,7 @@ function addBotMsg(html) {
   const msgs = document.getElementById('msgs');
   const el = document.createElement('div');
   el.className = 'msg bot';
-  el.innerHTML = '<div class="m-av"><i class="ti ti-robot"></i></div><div class="m-inner"><div class="bubble">' + html + '</div><div class="m-time">' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) + '</div></div>';
+  el.innerHTML = '<div class="m-av"><img src="icon.png" alt="" style="width:100%;height:100%;object-fit:contain;"/></div><div class="m-inner"><div class="bubble">' + html + '</div><div class="m-time">' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) + '</div></div>';
   msgs.appendChild(el);
   msgs.scrollTop = msgs.scrollHeight;
 }
@@ -742,6 +724,8 @@ function startAutoPolling() {
         stopAutoPolling();
         addBotMsg("Clinic replied! Here are the proposed appointment times:");
         showTimeSlots(data.proposals);
+      } else if (data.status === 'clinic_question' || data.status === 'clinic_auto_answered') {
+        (data.notes || []).forEach(note => addBotMsg(note));
       }
     })
     .catch(err => console.error('Auto-poll error:', err));
@@ -754,19 +738,16 @@ function appendPollingOptions() {
 
   const html = `
     <div class="bubble">
-      I am waiting for a response from the clinic. You can check your actual Gmail account for a response (if you reply to the request email), or click below to simulate a clinic response directly.
+      I am waiting for a response from the clinic. Reply to the request email from your Gmail account, then click below to check for it.
       <div style="margin-top:10px; display:flex; gap:8px;">
         <button onclick="pollGmailReply(this)" style="padding: 6px 12px; background: #fff; color: #185FA5; border: 1px solid #185FA5; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight:600;">
           <i class="ti ti-mail"></i> Poll Gmail
-        </button>
-        <button onclick="simulateClinicResponse()" style="padding: 6px 12px; background: #185FA5; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight:600;">
-          <i class="ti ti-device-laptop"></i> Simulate Response
         </button>
       </div>
     </div>
   `;
 
-  el.innerHTML = '<div class="m-av"><i class="ti ti-robot"></i></div><div class="m-inner">' + html + '</div>';
+  el.innerHTML = '<div class="m-av"><img src="icon.png" alt="" style="width:100%;height:100%;object-fit:contain;"/></div><div class="m-inner">' + html + '</div>';
   const msgs = document.getElementById('msgs');
   msgs.appendChild(el);
   msgs.scrollTop = msgs.scrollHeight;
@@ -789,10 +770,12 @@ function pollGmailReply(btn) {
     if (data.status === 'proposals_found') {
       stopAutoPolling();
       showTimeSlots(data.proposals);
+    } else if (data.status === 'clinic_question' || data.status === 'clinic_auto_answered') {
+      (data.notes || []).forEach(note => addBotMsg(note));
     } else if (data.status === 'gemini_error') {
       addBotMsg(data.message);
     } else {
-      addBotMsg("No reply found in Gmail yet from any contacted clinic. Make sure you replied with the booking subject, or click 'Simulate Response' to bypass.");
+      addBotMsg("No reply found in Gmail yet from any contacted clinic. Make sure you replied with the booking subject line intact.");
     }
   })
   .catch(err => {
@@ -802,20 +785,6 @@ function pollGmailReply(btn) {
   });
 }
 
-function simulateClinicResponse() {
-  stopAutoPolling();
-  showTyping();
-  setTimeout(() => {
-    hideTyping();
-    // Simulate one proposed time per contacted clinic, so multi-clinic
-    // selections can be demoed end to end without waiting on real email.
-    const sampleTimes = ["Monday, July 7 at 10:00 AM", "Wednesday, July 9 at 2:30 PM", "Thursday, July 10 at 9:00 AM"];
-    const selections = session.selected_bookings || [];
-    const proposals = selections.map((b, i) => ({ clinic: b.clinic, doctor: b.doctor, time: sampleTimes[i % sampleTimes.length] }));
-    addBotMsg("Clinic(s) responded with proposed times! Please select one below to finalize your booking.");
-    showTimeSlots(proposals);
-  }, 800);
-}
 
 function showTimeSlots(proposals) {
   const el = document.createElement('div');
@@ -834,7 +803,7 @@ function showTimeSlots(proposals) {
     </div>
   `;
 
-  el.innerHTML = '<div class="m-av"><i class="ti ti-robot"></i></div><div class="m-inner" style="width:260px;">' + html + '</div>';
+  el.innerHTML = '<div class="m-av"><img src="icon.png" alt="" style="width:100%;height:100%;object-fit:contain;"/></div><div class="m-inner" style="width:260px;">' + html + '</div>';
   const msgs = document.getElementById('msgs');
   msgs.appendChild(el);
   msgs.scrollTop = msgs.scrollHeight;

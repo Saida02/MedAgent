@@ -13,7 +13,7 @@ import sys
 import threading
 from functools import lru_cache
 
-from tools.config import MCP_CONFIG_PATH
+from config import MCP_CONFIG_PATH
 
 
 class MCPUnavailableError(RuntimeError):

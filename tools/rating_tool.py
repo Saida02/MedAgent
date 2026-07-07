@@ -4,9 +4,9 @@ Scoring/ranking tool backing `rating_engineer_skill`.
 Scores each clinic+doctor pair on a 0-100 scale using: Google rating,
 distance, specialty match, and an LLM-based review-sentiment proxy (via the
 doctor summary text, since no live review feed is wired up). Falls back to
-a pure-heuristic score (no sentiment term) if Gemini is unavailable.
+a pure-heuristic score (no sentiment term) if the ADK agent is unavailable.
 """
-from tools import gemini_tool
+import adk_llm
 
 
 def _safe_float(value, default=0.0) -> float:
@@ -27,9 +27,9 @@ def _distance_score(distance: str) -> float:
 
 
 def _sentiment_scores_batch(summaries: list) -> list:
-    """One Gemini call scoring every clinic's summary at once, instead of
-    one call per clinic -- see maps_tool._enrich_with_doctors_batch for why
-    that matters under the free tier's 5-requests/minute limit."""
+    """One LLM call scoring every clinic's summary at once, instead of one
+    call per clinic -- see maps_tool._enrich_with_doctors_batch for why that
+    matters under the free tier's per-minute rate limit."""
     if not summaries:
         return []
     items = "\n".join(f'{i + 1}. "{s}"' for i, s in enumerate(summaries))
@@ -42,7 +42,7 @@ Return a single JSON object: {{"scores": [<number>, ...]}} with exactly
 {len(summaries)} entries, in the same order as the numbered summaries above.
 """
     default = {"scores": [7.0] * len(summaries)}
-    result = gemini_tool.generate_json(prompt, default)
+    result = adk_llm.generate_json(prompt, default, skill="rating-engineer-skill")
     scores = result.get("scores")
     if not isinstance(scores, list) or len(scores) != len(summaries):
         scores = default["scores"]

@@ -2,8 +2,10 @@
 __pycache__/
 *.pyc
 data/bookings_log.json
+data/clinics_cache.json
 .venv/
 .claude/
+.mcp-packages/
 
 # Contains a real Google Maps API key (mcp_config.json) and a Google
 # service-account private key (genial-union-*.json) -- never commit these.

@@ -1,5 +1,5 @@
 ---
-name: confirmation_skill
+name: confirmation-skill
 description: Step 7/7 (FINAL STEP) of the healthcare appointment pipeline. Handles the clinic's email reply and finalizes the appointment via SMS + email.
 ---
 
@@ -48,7 +48,7 @@ data, no extra explanation.
 
 [`tools/gmail_tool.py`](../../tools/gmail_tool.py) (`check_for_reply`) polls
 for and parses the clinic's reply into proposed time slots;
-[`tools/twilio_tool.py`](../../tools/twilio_tool.py)
-(`send_confirmation_sms`) sends the final SMS via Twilio's direct API (not
-MCP, per the workflow); [`tools/sheets_tool.py`](../../tools/sheets_tool.py)
+[`tools/sms_tool.py`](../../tools/sms_tool.py)
+(`send_confirmation_sms`) sends the final SMS via an email-to-SMS carrier
+gateway (not MCP); [`tools/sheets_tool.py`](../../tools/sheets_tool.py)
 logs the outcome.

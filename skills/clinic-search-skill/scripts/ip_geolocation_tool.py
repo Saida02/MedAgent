@@ -14,7 +14,7 @@ import logging
 
 import requests
 
-from tools.config import IPGEOLOCATION_API_KEY
+from config import IPGEOLOCATION_API_KEY
 
 logger = logging.getLogger(__name__)
 

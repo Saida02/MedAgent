@@ -1,5 +1,5 @@
 ---
-name: symptom_analysis_skill
+name: symptom-analysis-skill
 description: Step 2/7 of the healthcare appointment pipeline. Determines medical specialty and urgency from patient symptoms.
 ---
 

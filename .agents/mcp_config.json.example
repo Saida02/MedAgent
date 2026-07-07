@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "gmail-mcp": {
-      "command": "npx",
+      "_comment": "On Windows, run `npm install @shinzolabs/gmail-mcp` inside a local .mcp-packages/ folder first, then point node directly at its dist/index.js (see README) -- invoking it via `npx` on Windows causes every call to hang until timeout, because the cmd.exe wrapper npx needs on Windows breaks stdio flushing. PORT=0 is required too -- without it the server's internal HTTP listener always binds to port 3000 and crashes with EADDRINUSE the moment anything else (even a previous run of itself) is already on that port.",
+      "command": "node",
       "args": [
-        "-y",
-        "@shinzolabs/gmail-mcp"
+        "/absolute/path/to/.mcp-packages/node_modules/@shinzolabs/gmail-mcp/dist/index.js"
       ],
       "env": {
         "PORT": "0"

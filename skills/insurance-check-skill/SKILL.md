@@ -1,5 +1,5 @@
 ---
-name: insurance_check_skill
+name: insurance-check-skill
 description: Step 5/7 of the healthcare appointment pipeline. Checks insurance compatibility between the patient's provider and each ranked clinic.
 ---
 

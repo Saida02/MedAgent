@@ -1,5 +1,5 @@
 ---
-name: booking_email_skill
+name: booking-email-skill
 description: Step 6/7 of the healthcare appointment pipeline. Sends an appointment request email to the patient's selected clinic via Gmail MCP.
 ---
 

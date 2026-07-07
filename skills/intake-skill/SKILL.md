@@ -1,5 +1,5 @@
 ---
-name: intake_skill
+name: intake-skill
 description: Step 1/7 (entry point) of the healthcare appointment pipeline. Collects patient data via chat before any other step may run.
 ---
 

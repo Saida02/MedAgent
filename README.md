@@ -67,21 +67,26 @@ tools/                One module per external capability:
                                          instead of guessing on failure)
                        maps_tool       - Google Maps MCP -> Places API
                                          fallback -> synthetic placeholder
-                       gmail_tool      - Gmail MCP -> SMTP/IMAP fallback
-                       twilio_tool     - Twilio SMS -> email-to-SMS carrier
-                                         gateway fallback
+                       gmail_tool      - Gmail MCP only (send + read replies)
+                       sms_tool        - Email-to-SMS carrier gateway
+                                         (broadcasts to major US carriers)
                        sheets_tool     - Google Sheets MCP -> local JSON log
-                       mcp_client      - generic stdio MCP client used by
-                                         the above (reuses .agents/mcp_config.json)
                        intake_tool, symptom_analysis_tool, insurance_tool,
                        rating_tool, assistant_chat_tool
+
+config.py / mcp_client.py   Project-root-level shared infrastructure (not
+                             capability wrappers themselves): config.py loads
+                             .env; mcp_client.py is the generic stdio MCP
+                             client every MCP-backed tool above calls into
+                             (reuses .agents/mcp_config.json).
+
 skills/                One folder per pipeline step, each with a SKILL.md
                        (purpose, inputs/outputs, when to hand off) and, for
                        clinic_search_skill, scripts/ip_geolocation_tool.py
 ```
 
 **Design principle — no guessing, no getting stuck.** Every external
-dependency (MCP servers, Gemini, Twilio) has a graceful fallback so the
+dependency (MCP servers, Gemini, SMS delivery) has a graceful fallback so the
 pipeline always reaches a terminal state instead of stalling. Where a
 result would otherwise have to be *guessed* (e.g. patient intent, a
 doctor's identity), the agent either does a real lookup (grounded search)
@@ -105,8 +110,7 @@ Open http://localhost:5000 in a browser.
 |---|---|
 | `GEMINI_API_KEY` | Reasoning + grounded search (free tier at [aistudio.google.com](https://aistudio.google.com/apikey)) |
 | `GOOGLE_MAPS_API_KEY` | Clinic search fallback if the Maps MCP server is unavailable |
-| `GMAIL_SMTP_ADDRESS` / `GMAIL_SMTP_APP_PASSWORD` | Sends/reads booking emails ([create an app password](https://myaccount.google.com/apppasswords)) |
-| `TWILIO_*` or `SMS_GATEWAY_DOMAIN` | Final SMS confirmation (Twilio direct API, or a free email-to-SMS carrier gateway) |
+| `SMS_GATEWAY_DOMAIN` | Final SMS confirmation, sent via a free email-to-SMS carrier gateway (through the Gmail MCP server) |
 | `TEST_PATIENT_EMAIL` / `TEST_PATIENT_PHONE` | The demo patient's contact info, for verifying real delivery |
 
 None of these are required individually for the agent to run end-to-end —
@@ -117,7 +121,8 @@ core reasoning steps, a clear error message) rather than crashing.
 
 Gmail, Google Maps, and Google Sheets are all wired up as **MCP servers**
 (`.agents/mcp_config.json.example`), invoked through a generic stdio MCP
-client (`tools/mcp_client.py`). If an MCP server can't be reached in a
-given environment, each tool transparently falls back to a direct API call
-(Places API, SMTP/IMAP, a local JSON log) so the same code works whether or
-not MCP is configured.
+client (`mcp_client.py`). Google Maps and Google Sheets transparently
+fall back to a direct API call (Places API, a local JSON log) if their MCP
+server can't be reached; Gmail is MCP-only -- if the Gmail MCP server is
+unreachable, sending/reading fails visibly instead of silently switching
+transport.

@@ -249,7 +249,7 @@ At the end of step 7:
   - **Gmail** → MCP
   - **Sheets** → MCP
   - **Maps** → MCP
-  - **Twilio** → Direct API
+  - **SMS** → Email-to-SMS gateway (direct, not MCP)
   - **Gemini** → reasoning layer
 
 ---

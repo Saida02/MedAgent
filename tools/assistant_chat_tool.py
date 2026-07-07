@@ -5,7 +5,7 @@ clinics, next steps, or anything else) -- these turns should be answered
 naturally using the session's context, not by re-running intake/search or
 repeating the same "here are your clinics" message every time.
 """
-from tools import gemini_tool
+import adk_llm
 
 _FALLBACK_REPLY = (
     "I'm here to help! You can select one or more clinics above using the "
@@ -50,4 +50,4 @@ what they asked using the info above. If they want to pick a clinic, remind
 them to use the Select buttons above rather than typing a choice. Don't
 re-list every clinic unless they specifically ask for the list again.
 """
-    return gemini_tool.generate_text(prompt, _FALLBACK_REPLY)
+    return adk_llm.generate_text(prompt, _FALLBACK_REPLY)

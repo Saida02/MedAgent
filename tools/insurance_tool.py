@@ -1,39 +1,60 @@
 """
 Insurance network matching tool backing `insurance_check_skill`.
 
-There is no live insurance-network API in scope for this project, so
-coverage is estimated with a small heuristic network map plus a Gemini
-plausibility check for providers/clinics not in the map. Anything that
-can't be determined is marked "unknown" per the workflow spec rather than
-guessed as covered/not covered.
+Uses an ADK LlmAgent with the built-in google_search grounding tool to look
+up what a specific clinic/doctor's own website actually lists as accepted
+insurance, instead of guessing from how generally common a provider is. One
+batched call covers every clinic in the search results (see maps_tool's
+doctor-lookup batching for the same rationale: fewer LLM calls per turn).
 """
-from tools import gemini_tool
-
-# Common large US insurance networks that are broadly accepted -- used as a
-# heuristic baseline when a clinic's real network affiliation is unknown.
-_BROAD_NETWORK_PROVIDERS = {
-    "aetna", "cigna", "unitedhealthcare", "united healthcare", "blue cross",
-    "blue cross blue shield", "bcbs", "humana", "kaiser permanente",
-}
+import adk_llm
 
 
-def check_coverage(insurance_provider: str, clinic_name: str) -> str:
-    """Returns "covered" | "not_covered" | "unknown"."""
+def _unknown_result(clinics: list) -> list:
+    return [{"insurance_status": "unknown", "insurance_detail": "Could not verify with a web search."} for _ in clinics]
+
+
+def check_coverage_batch(insurance_provider: str, clinics: list) -> list:
+    """
+    Returns a list (same order as `clinics`) of
+    {"insurance_status": "covered"|"not_covered"|"unknown",
+     "insurance_detail": "<what was actually found, or why not>"}.
+    """
     if not insurance_provider or not insurance_provider.strip():
-        return "unknown"
+        return [{"insurance_status": "unknown", "insurance_detail": "No insurance provider given."} for _ in clinics]
+    if not clinics:
+        return []
 
-    provider_key = insurance_provider.strip().lower()
-    if provider_key in _BROAD_NETWORK_PROVIDERS:
-        return "covered"
-
+    clinic_list = "\n".join(
+        f"{i + 1}. {c.get('name')} -- {c.get('address')}" for i, c in enumerate(clinics)
+    )
     prompt = f"""
-Patient insurance provider: {insurance_provider}
-Clinic: {clinic_name}
-Based only on how common/broadly-accepted this insurance provider generally
-is at outpatient clinics in the US, classify likely coverage.
-Return strict JSON: {{"status": "covered" | "not_covered" | "unknown"}}.
-If you are not reasonably confident, return "unknown".
+For EACH clinic below, search the web (their own website, or a reputable
+listing) for what insurance providers they actually accept, and determine
+whether "{insurance_provider}" is among them.
+Clinics:
+{clinic_list}
+
+Return a single JSON object: {{"results": [ {{"insurance_status": "covered" |
+"not_covered" | "unknown", "insurance_detail": "<one sentence: what you
+actually found, e.g. their listed accepted insurers, or that no insurance
+information was publicly found>"}}, ... ]}}
+The "results" array MUST have exactly {len(clinics)} entries, in the SAME
+ORDER as the numbered clinics above.
+If you cannot find real information for a clinic, use "unknown" -- never
+guess "covered" or "not_covered" without something you actually found.
 """
-    result = gemini_tool.generate_json(prompt, {"status": "unknown"})
-    status = result.get("status", "unknown")
-    return status if status in ("covered", "not_covered", "unknown") else "unknown"
+    default = {"results": _unknown_result(clinics)}
+    result = adk_llm.generate_json(prompt, default, grounded=True, skill="insurance-check-skill")
+    results = result.get("results")
+    if not isinstance(results, list) or len(results) != len(clinics):
+        return default["results"]
+
+    merged = []
+    for entry in results:
+        if not isinstance(entry, dict) or entry.get("insurance_status") not in ("covered", "not_covered", "unknown"):
+            merged.append({"insurance_status": "unknown", "insurance_detail": "Could not verify with a web search."})
+        else:
+            entry.setdefault("insurance_detail", "")
+            merged.append(entry)
+    return merged

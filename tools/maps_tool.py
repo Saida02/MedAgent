@@ -18,12 +18,19 @@ from pathlib import Path
 
 import requests
 
-from tools import gemini_tool, mcp_client
-from tools.config import FALLBACK_CLINIC_EMAIL, GOOGLE_MAPS_API_KEY
+import mcp_client
+import adk_llm
+from config import FALLBACK_CLINIC_EMAIL, GOOGLE_MAPS_API_KEY
 
 logger = logging.getLogger(__name__)
 
-_SKILL_SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "clinic_search_skill" / "scripts"
+# Caches each clinic's doctor/email lookup by place_id (or name+address for
+# synthetic/no-place_id clinics) so repeat lookups across sessions don't
+# re-spend LLM calls on a clinic already looked up before -- valuable given
+# the free tier's low daily request cap.
+_CLINIC_CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "clinics_cache.json"
+
+_SKILL_SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "clinic-search-skill" / "scripts"
 if str(_SKILL_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SKILL_SCRIPTS))
 
@@ -110,7 +117,7 @@ def _placeholder_clinics(specialty: str, area: str) -> list:
         }
         # These clinic names are synthetic (no live directory match), so
         # searching the web for "their" doctor would be meaningless --
-        # skip straight to the honest not-found default, no Gemini call.
+        # skip straight to the honest not-found default, no LLM call.
         clinic.update(_doctor_not_found_default(clinic))
         clinic["doctor_email"] = clinic["clinics_email"]
         clinic["doctor_phone"] = clinic["clinics_phone"]
@@ -119,25 +126,46 @@ def _placeholder_clinics(specialty: str, area: str) -> list:
 
 
 def _doctor_not_found_default(clinic: dict) -> dict:
-    # Empty names are the explicit "not found" signal -- rating_tool.py and
-    # the UI render this as "no specific doctor found" instead of a
-    # placeholder name that could be mistaken for a real one.
+    # Empty names/emails are the explicit "not found" signal -- rating_tool.py
+    # and the UI render this as "no specific doctor found" instead of a
+    # placeholder value that could be mistaken for a real one.
     return {
         "doctor_first_name": "",
         "doctor_last_name": "",
         "rating_doctor": clinic.get("rating", 4.5),
         "summary_doctor": "No specific provider found for this clinic -- ask the clinic directly who's available.",
+        "clinic_email_found": "",
+        "doctor_email_found": "",
     }
 
 
+def _clinic_cache_key(clinic: dict) -> str:
+    return clinic.get("place_id") or f"{clinic.get('name')}|{clinic.get('address')}"
+
+
+def _load_clinic_cache() -> dict:
+    if not _CLINIC_CACHE_PATH.exists():
+        return {}
+    try:
+        return json.loads(_CLINIC_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_clinic_cache(cache: dict) -> None:
+    _CLINIC_CACHE_PATH.parent.mkdir(exist_ok=True)
+    _CLINIC_CACHE_PATH.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+
+
 def _enrich_with_doctors_batch(clinics: list, specialty: str) -> list:
-    """Uses one Gemini call (with Google Search grounding) to look up a real
-    doctor at each clinic, instead of one call per clinic -- a single chat
-    turn already spends 2+ Gemini calls on intake/symptom-analysis, so
-    per-clinic calls blow through the free tier's 5-requests/minute limit
-    well before all clinics get a real lookup. Real per-doctor emails/phones
-    are rarely public, so the doctor contact fields still default to the
-    clinic's own contact channel (handled by the caller)."""
+    """Uses one ADK agent call (with google_search grounding) to look up a
+    real doctor AND a real contact email at each clinic, instead of one call
+    per clinic -- a single chat turn already spends 2+ LLM calls on
+    intake/symptom-analysis, so per-clinic calls blow through the free
+    tier's rate limit well before all clinics get a real lookup. Google Maps
+    never returns email addresses, so this is the only source for
+    clinics_email/doctor_email; the caller falls back to
+    FALLBACK_CLINIC_EMAIL for anything not confidently found."""
     defaults = [_doctor_not_found_default(c) for c in clinics]
     if not clinics:
         return defaults
@@ -147,22 +175,29 @@ def _enrich_with_doctors_batch(clinics: list, specialty: str) -> list:
     )
     prompt = f"""
 Search the web for a real doctor or provider at EACH of these clinics, in
-the given specialty.
+the given specialty. Also search each clinic's official website for a real
+public contact email address, and -- only if a specific doctor was found --
+that doctor's own direct email if one is publicly listed separately from
+the clinic's general contact address.
 Specialty needed: {specialty}
 Clinics:
 {clinic_list}
 
 Return a single JSON object: {{"doctors": [ {{"doctor_first_name": "",
 "doctor_last_name": "", "rating_doctor": <number 3.5-5.0>, "summary_doctor":
-"<one sentence>"}}, ... ]}}
+"<one sentence>", "clinic_email_found": "", "doctor_email_found": ""}}, ... ]}}
 The "doctors" array MUST have exactly {len(clinics)} entries, in the SAME
 ORDER as the numbered clinics above (one entry per clinic).
 For any clinic where web search finds no specific doctor, use an EMPTY
 STRING for that entry's doctor_first_name and doctor_last_name (never
 invent a specific-sounding but unverified name), and say so plainly in its
 summary_doctor.
+For clinic_email_found and doctor_email_found: use an EMPTY STRING unless
+you are confident you found a REAL, publicly listed email address for that
+exact clinic or doctor -- never guess or construct a plausible-looking
+email (e.g. "info@clinicname.com") that you did not actually find.
 """
-    result = gemini_tool.generate_json(prompt, {"doctors": defaults}, grounded=True)
+    result = adk_llm.generate_json(prompt, {"doctors": defaults}, grounded=True, skill="clinic-search-skill")
     doctors = result.get("doctors")
     if not isinstance(doctors, list) or len(doctors) != len(clinics):
         return defaults
@@ -223,22 +258,32 @@ def search_clinics(location: dict | None, specialty: str, max_results: int = 10)
             "distance": "unknown_if_no_location" if used_fallback_geo else item.get("distance", ""),
             "rating": item.get("rating", details.get("rating", "")),
             "place_id": place_id,
-            # Places API doesn't expose real clinic inboxes, and guessing
-            # "appointments@<their-real-domain>" risks actually emailing a
-            # real business with test data. Always route booking emails to
-            # the configured test address instead, so this stays a safe,
-            # verifiable demo regardless of which real clinic was found.
+            # Places API never exposes email addresses -- this placeholder is
+            # only what shows up if the enrichment lookup below doesn't find
+            # (or isn't confident about) a real one for this exact clinic.
             "clinics_email": FALLBACK_CLINIC_EMAIL,
             "clinics_phone": details.get("formatted_phone_number", ""),
         }
         clinics.append(clinic)
 
-    # One batched Gemini call for all clinics instead of one call each --
-    # keeps this well within the free-tier per-minute rate limit even when
-    # intake/symptom-analysis calls already used up part of it this turn.
-    for clinic, doctor_info in zip(clinics, _enrich_with_doctors_batch(clinics, specialty)):
-        clinic.update(doctor_info)
-        clinic["doctor_email"] = clinic["clinics_email"]
+    # Reuse any clinic already looked up in a past session (by place_id) so
+    # repeat lookups don't re-spend LLM calls on the free tier's low daily
+    # cap -- only clinics genuinely new to the cache go to the agent.
+    cache = _load_clinic_cache()
+    uncached = [c for c in clinics if _clinic_cache_key(c) not in cache]
+    if uncached:
+        for clinic, info in zip(uncached, _enrich_with_doctors_batch(uncached, specialty)):
+            cache[_clinic_cache_key(clinic)] = info
+        _save_clinic_cache(cache)
+
+    for clinic in clinics:
+        info = cache[_clinic_cache_key(clinic)]
+        clinic.update(info)
+        # Only override the safe fallback when the agent found (and was
+        # confident enough to report) a real address -- an empty string
+        # means "not found", never a guess.
+        clinic["clinics_email"] = info.get("clinic_email_found") or clinic["clinics_email"]
+        clinic["doctor_email"] = info.get("doctor_email_found") or clinic["clinics_email"]
         clinic["doctor_phone"] = clinic["clinics_phone"]
 
     return clinics

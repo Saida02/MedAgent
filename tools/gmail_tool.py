@@ -1,36 +1,27 @@
 """
 Email tool backing `booking_email_skill` and the email-reply half of
-`confirmation_skill`. Per the workflow, Gmail access goes through the
-already-configured Gmail MCP server; if that's unreachable (no OAuth session
-in this environment) it falls back to SMTP, and finally to a local
-simulation so the demo pipeline always completes end-to-end.
+`confirmation_skill`. Goes through the Gmail MCP server (@shinzolabs/gmail-mcp)
+only -- no SMTP/IMAP or local-simulation fallback. If the MCP server is
+unreachable, sending/reading fails visibly (email_status="failed" / not
+found) rather than silently substituting a different transport.
 """
-import email
-import imaplib
 import logging
-import smtplib
-import time
 import uuid
 from datetime import datetime
-from email.mime.text import MIMEText
 
-from tools import gemini_tool, mcp_client
-from tools.config import GMAIL_SMTP_ADDRESS, GMAIL_SMTP_APP_PASSWORD
+import mcp_client
+import adk_llm
 
 logger = logging.getLogger(__name__)
 
-# In-memory store simulating "sent emails awaiting a reply", used only when
-# neither the Gmail MCP nor SMTP is reachable so /api/check_reply has
-# something deterministic to poll.
-_SIMULATED_OUTBOX: dict[str, dict] = {}
 
-
-def _send_via_mcp(to: str, subject: str, body: str) -> str:
+def _send_via_mcp(to: str, subject: str, body: str, cc: str | None = None) -> str:
     import json
 
-    raw = mcp_client.call_tool(
-        "gmail-mcp", "send_email", {"to": [to], "subject": subject, "body": body}
-    )
+    payload = {"to": [to], "subject": subject, "body": body}
+    if cc:
+        payload["cc"] = [cc]
+    raw = mcp_client.call_tool("gmail-mcp", "send_message", payload)
     try:
         data = json.loads(raw)
         return data.get("id") or data.get("message_id") or str(uuid.uuid4())
@@ -38,53 +29,39 @@ def _send_via_mcp(to: str, subject: str, body: str) -> str:
         return str(uuid.uuid4())
 
 
-def _send_via_smtp(to: str, subject: str, body: str) -> str:
-    if not (GMAIL_SMTP_ADDRESS and GMAIL_SMTP_APP_PASSWORD):
-        raise RuntimeError("SMTP not configured")
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = GMAIL_SMTP_ADDRESS
-    msg["To"] = to
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
-        server.login(GMAIL_SMTP_ADDRESS, GMAIL_SMTP_APP_PASSWORD)
-        server.sendmail(GMAIL_SMTP_ADDRESS, [to], msg.as_string())
-    return str(uuid.uuid4())
-
-
-def send_booking_request_email(to: str, subject: str, body: str) -> dict:
-    """Returns {"email_status": "sent"|"failed", "message_id": str}."""
+def send_booking_request_email(to: str, subject: str, body: str, cc: str | None = None) -> dict:
+    """Returns {"email_status": "sent"|"failed", "message_id": str|None}.
+    `cc` is the patient's own email (a required intake field) so they
+    receive a copy of everything sent on their behalf."""
     try:
-        message_id = _send_via_mcp(to, subject, body)
+        message_id = _send_via_mcp(to, subject, body, cc)
         logger.info("Booking email sent via Gmail MCP to %s", to)
+        return {"email_status": "sent", "message_id": message_id}
     except mcp_client.MCPUnavailableError as exc:
-        logger.info("Gmail MCP unavailable (%s); trying SMTP fallback", exc)
-        try:
-            message_id = _send_via_smtp(to, subject, body)
-            logger.info("Booking email sent via SMTP to %s", to)
-        except Exception as smtp_exc:  # noqa: BLE001
-            logger.info("SMTP unavailable (%s); simulating send", smtp_exc)
-            message_id = f"simulated-{uuid.uuid4()}"
-            _SIMULATED_OUTBOX[message_id] = {
-                "to": to,
-                "subject": subject,
-                "body": body,
-                "sent_at": time.time(),
-            }
-    return {"email_status": "sent", "message_id": message_id}
+        logger.warning("Gmail MCP unavailable (%s); email not sent", exc)
+        return {"email_status": "failed", "message_id": None}
 
 
-def build_booking_email(patient_name: str, symptoms_summary: str, clinic_name: str,
-                          insurance_status: str, preferred_time: str) -> tuple[str, str]:
+def build_booking_email(patient_name: str, date_of_birth: str, symptoms_summary: str, clinic_name: str,
+                          insurance_provider: str | None, preferred_time: str, doctor_name: str | None = None) -> tuple[str, str]:
     # Clinic name is embedded in the subject so that when the patient
     # contacts several clinics at once, each reply thread ("Re: ...") can be
     # attributed back to the specific clinic it came from.
     subject = f"Appointment Request ({clinic_name}) - {patient_name}"
+    # "No specific doctor found" is maps_tool's honest not-found signal, not
+    # a real preference -- only mention a doctor if one was actually found.
+    doctor_line = f"Preferred doctor: {doctor_name}\n" if doctor_name and doctor_name != "No specific doctor found" else ""
+    # Only mention insurance if the patient actually gave a provider --
+    # don't state a coverage guess/status the clinic didn't ask for.
+    insurance_line = f"Insurance: {insurance_provider}\n" if insurance_provider else ""
     body = (
         f"Hello,\n\n"
         f"I would like to request an appointment.\n\n"
         f"Patient: {patient_name}\n"
+        f"Date of birth: {date_of_birth or 'Not provided'}\n"
         f"Symptoms summary: {symptoms_summary}\n"
-        f"Insurance status: {insurance_status}\n"
+        f"{insurance_line}"
+        f"{doctor_line}"
         f"Preferred time/day: {preferred_time or 'Any available slot'}\n\n"
         f"Could you please reply with your earliest available appointment "
         f"times so I can confirm one? Thank you.\n\n"
@@ -108,46 +85,58 @@ def build_confirmation_email(patient_name: str, clinic_name: str, selected_time:
     return subject, body
 
 
-def _extract_plain_text(msg: email.message.Message) -> str:
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain" and not part.get_filename():
-                charset = part.get_content_charset() or "utf-8"
-                return part.get_payload(decode=True).decode(charset, errors="replace")
-        return ""
-    charset = msg.get_content_charset() or "utf-8"
-    return msg.get_payload(decode=True).decode(charset, errors="replace")
+def build_followup_answer_email(patient_name: str, clinic_name: str, clinic_question: str, answer: str) -> tuple[str, str]:
+    """Sent when the clinic's reply asked a question instead of proposing a
+    time -- answers that specific question and reiterates the original
+    appointment request so the clinic can move forward."""
+    subject = f"Re: Appointment Request ({clinic_name}) - {patient_name}"
+    body = (
+        f"Hello,\n\n"
+        f"Thank you for your reply. To answer your question ({clinic_question}):\n"
+        f"{answer}\n\n"
+        f"I'd still like to request an appointment -- could you let me know "
+        f"your earliest available times? Thank you.\n\n"
+        f"Best,\n{patient_name}\n\n"
+        f"Requested via MedAgent (clinic: {clinic_name})"
+    )
+    return subject, body
 
 
-def _search_via_imap(subject_contains: str) -> str:
-    """Reads the most recent inbox message whose subject contains
-    `subject_contains` (e.g. "Re: Appointment Request..."), using the same
-    Gmail app password already configured for SMTP sending. Returns the
-    plain-text body, or "" if nothing matches."""
-    if not (GMAIL_SMTP_ADDRESS and GMAIL_SMTP_APP_PASSWORD):
-        raise RuntimeError("IMAP not configured (no GMAIL_SMTP_* credentials)")
-
-    with imaplib.IMAP4_SSL("imap.gmail.com", timeout=10) as imap:
-        imap.login(GMAIL_SMTP_ADDRESS, GMAIL_SMTP_APP_PASSWORD)
-        imap.select("INBOX")
-        status, data = imap.search(None, f'(SUBJECT "{subject_contains}")')
-        if status != "OK" or not data or not data[0]:
-            return ""
-        latest_uid = data[0].split()[-1]
-        status, msg_data = imap.fetch(latest_uid, "(RFC822)")
-        if status != "OK" or not msg_data or not msg_data[0]:
-            return ""
-        msg = email.message_from_bytes(msg_data[0][1])
-        return _extract_plain_text(msg)
+def _extract_mcp_message_body(message: dict) -> str:
+    """gmail-mcp's get_message returns the Gmail API message resource:
+    a simple message has payload.body.data directly, a multipart one
+    (e.g. text/plain + text/html) has payload.parts instead -- pick the
+    text/plain part."""
+    payload = message.get("payload") or {}
+    parts = payload.get("parts")
+    if not parts:
+        return (payload.get("body") or {}).get("data", "")
+    for part in parts:
+        if part.get("mimeType") == "text/plain":
+            return (part.get("body") or {}).get("data", "")
+    return ""
 
 
-def check_for_reply(clinic_name: str) -> list:
+_NOT_FOUND = {"found": False, "proposals": [], "clinic_question": None, "known_answer": None}
+
+
+def check_for_reply(clinic_name: str, known_info: dict | None = None, exclude_message_id: str | None = None) -> dict:
     """
     Polls for THIS SPECIFIC clinic's reply (matched via the clinic-tagged
-    subject line) and, if found, extracts proposed appointment time slots
-    via Gemini. Returns a list of human-readable time strings, or an empty
-    list if no reply is available yet. Called once per contacted clinic
-    when the patient reached out to more than one.
+    subject line). Returns {"found", "proposals", "clinic_question",
+    "known_answer"} (see _extract_reply_info). "found" is False when there's
+    genuinely no reply yet, or the Gmail MCP server is unreachable -- a
+    reply that doesn't contain a proposed time (e.g. the clinic asked a
+    question instead) is still "found", so the patient sees the real
+    situation instead of a misleading "no reply found" message. Called once
+    per contacted clinic when the patient reached out to more than one.
+
+    exclude_message_id is the id of the booking request WE sent -- Gmail's
+    "Re:"-prefixed subject search still matches the original message too
+    (Gmail's subject index ignores the Re:/Fwd: prefix for threading), so
+    with a test/fallback address where the clinic and patient share one
+    inbox, the agent's own just-sent request would otherwise come back
+    looking like the clinic already replied to it.
     """
     subject_tag = f"Re: Appointment Request ({clinic_name})"
 
@@ -155,30 +144,30 @@ def check_for_reply(clinic_name: str) -> list:
         import json
 
         raw = mcp_client.call_tool(
-            "gmail-mcp", "search_emails", {"query": f"subject:{subject_tag}"}
+            # Quoted so Gmail's search matches the tag as one literal phrase --
+            # unquoted, Gmail treats "(" / ")" as its own OR-grouping syntax and
+            # only binds subject: to the single token right after it, so the
+            # rest of the tag would silently search the whole message instead
+            # of the subject line. maxResults > 1 so there's something left
+            # to fall back to once the original message is filtered out below.
+            "gmail-mcp", "list_messages", {"q": f'subject:"{subject_tag}"', "maxResults": 5}
         )
-        data = json.loads(raw)
-        messages = data.get("messages", [])
-        if messages:
-            latest_body = messages[0].get("snippet") or messages[0].get("body", "")
-            return _extract_time_proposals(latest_body)
-        return []
+        messages = json.loads(raw).get("messages", [])
+        messages = [m for m in messages if m["id"] != exclude_message_id]
+        if not messages:
+            return _NOT_FOUND
+        raw_message = mcp_client.call_tool("gmail-mcp", "get_message", {"id": messages[0]["id"]})
+        body = _extract_mcp_message_body(json.loads(raw_message))
+        if not body:
+            return _NOT_FOUND
+        return _extract_reply_info(body, known_info)  # GeminiError, if any, propagates to the caller
     except mcp_client.MCPUnavailableError as exc:
-        logger.info("Gmail MCP unavailable (%s); trying IMAP fallback", exc)
-
-    try:
-        body = _search_via_imap(subject_tag)
-    except Exception as exc:  # noqa: BLE001 -- IMAP/connection failure only
-        logger.info("IMAP polling unavailable (%s); nothing to report", exc)
-        return []
-
-    if not body:
-        return []
-    return _extract_time_proposals(body)  # GeminiError, if any, propagates to the caller
+        logger.warning("Gmail MCP unavailable (%s); cannot check for replies", exc)
+        return _NOT_FOUND
 
 
 def _normalize_proposal(text: str) -> str:
-    """Reformats whatever date/time phrasing Gemini produced (inconsistent
+    """Reformats whatever date/time phrasing the agent produced (inconsistent
     capitalization, day-before-month, etc.) into one consistent display
     format: "Weekday, Month DD, YYYY at H:MM AM/PM". Falls back to the
     original text untouched if it doesn't parse as a date (fuzzy parsing on
@@ -197,16 +186,50 @@ def _normalize_proposal(text: str) -> str:
         return text
 
 
-def _extract_time_proposals(body: str) -> list:
+def _extract_reply_info(body: str, known_info: dict | None = None) -> dict:
+    """Reads a clinic's reply and figures out, in one ADK agent call:
+    - any proposed appointment time slots
+    - if none were proposed, what the clinic is actually asking for
+    - whether that question is already answerable from the patient's known
+      info (in which case the agent can reply immediately without bothering
+      the patient) or genuinely needs to be asked
+    Returns {"found": True, "proposals": [...], "clinic_question": str|None,
+    "known_answer": str|None}. Never invents a "known_answer" -- only fills
+    it when the known_info actually contains that information.
+    """
+    known_info = known_info or {}
+    known_info_text = "\n".join(f"- {k}: {v}" for k, v in known_info.items() if v) or "(none provided)"
     prompt = f"""
-Extract proposed appointment date/time slots from this clinic reply email.
-Ignore any quoted/forwarded text (e.g. lines starting with ">" or after
-"On ... wrote:") -- only use the new reply content.
-Return strict JSON: {{"proposals": ["<human readable slot>", ...]}}.
+This is a clinic's reply to an appointment request email. Ignore any
+quoted/forwarded text (e.g. lines starting with ">" or after "On ... wrote:")
+-- only use the new reply content.
+
+What the agent already knows about the patient:
+{known_info_text}
+
+1. Extract any proposed appointment date/time slots.
+2. If NO times were proposed, identify the single specific question or
+   piece of information the clinic is asking for (e.g. "insurance member ID",
+   "reason for visit", "preferred callback time"). If they proposed times,
+   this should be null.
+3. If a question was identified AND the "what the agent already knows"
+   section above genuinely already answers it, provide that exact answer.
+   Otherwise (including if you're not confident), this must be null -- do
+   not guess or invent an answer the patient didn't actually give.
+
+Return strict JSON: {{"proposals": ["<human readable slot>", ...],
+"clinic_question": "<question>" or null, "known_answer": "<answer>" or null}}
 Email body:
 ---
 {body}
 ---
 """
-    result = gemini_tool.generate_json(prompt, {"proposals": []}, raise_on_failure=True)
-    return [_normalize_proposal(p) for p in result.get("proposals") or []]
+    default = {"proposals": [], "clinic_question": None, "known_answer": None}
+    result = adk_llm.generate_json(prompt, default, raise_on_failure=True, skill="confirmation-skill")
+    proposals = [_normalize_proposal(p) for p in result.get("proposals") or []]
+    return {
+        "found": True,
+        "proposals": proposals,
+        "clinic_question": result.get("clinic_question"),
+        "known_answer": result.get("known_answer"),
+    }

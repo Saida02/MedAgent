@@ -167,7 +167,7 @@
     <div class="s-item active"><i class="ti ti-message-circle"></i> Web chat <span class="s-badge" style="background:#185FA5">Only</span></div>
 
     <div class="sidebar-section">Output (notifications)</div>
-    <div class="s-item"><i class="ti ti-device-mobile"></i> SMS · Twilio</div>
+    <div class="s-item"><i class="ti ti-device-mobile"></i> SMS notification</div>
     <div class="s-item"><i class="ti ti-mail"></i> Email · Gmail API</div>
 
     <div class="sidebar-section">Today's activity</div>
@@ -204,7 +204,7 @@
         <div class="m-inner">
           <div class="bubble">
             Hello! I'm MedAgent. To book an appointment I'll need a few details.<br><br>
-            Please tell me your <strong>first and last name</strong>, <strong>date of birth</strong>, <strong>symptoms</strong>, <strong>insurance provider</strong>, and <strong>location</strong>.<br><br>
+            Please tell me your <strong>first and last name</strong>, <strong>date of birth</strong>, <strong>email</strong>, <strong>phone number</strong>, <strong>symptoms</strong>, <strong>insurance provider</strong>, and <strong>location</strong>.<br><br>
             <button onclick="autoFillTest()" style="padding: 6px 12px; background: #E6F1FB; color: #185FA5; border: 1px solid #185FA5; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.15s;">
               ✨ Auto-fill Sarah's Test Data
             </button>
@@ -295,7 +295,7 @@
         <div class="step-num idle" id="s7">7</div>
         <div class="step-body">
           <div class="step-title">Confirmed</div>
-          <div class="step-sub" id="s7sub">SMS (Twilio) + email to patient</div>
+          <div class="step-sub" id="s7sub">SMS + email to patient</div>
         </div>
       </div>
 
@@ -497,7 +497,7 @@ function updateStepsUI() {
   } else {
     s7.className = 'step-num idle';
     s7.textContent = '7';
-    document.getElementById('s7sub').textContent = 'SMS (Twilio) + email to patient';
+    document.getElementById('s7sub').textContent = 'SMS + email to patient';
   }
 }
 

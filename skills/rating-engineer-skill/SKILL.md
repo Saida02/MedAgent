@@ -1,5 +1,5 @@
 ---
-name: rating_engineer_skill
+name: rating-engineer-skill
 description: Step 4/7 of the healthcare appointment pipeline. Re-ranks clinics and doctors using an AI scoring model.
 ---
 
