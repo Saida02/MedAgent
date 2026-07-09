@@ -18,9 +18,7 @@ appointment, acting as a personal concierge rather than a search tool.
 
 ## Solution: a 7-step agent pipeline
 
-The agent follows a strict, sequential pipeline (see
-[`AI_Healthcare_Appointment_Agent_Workflow.md`](AI_Healthcare_Appointment_Agent_Workflow.md)
-for the full spec) where each step's output feeds the next:
+The agent follows a strict, sequential pipeline where each step's output feeds the next:
 
 1. **Intake** — collects name, date of birth, symptoms, insurance, location
    through natural conversation (only step allowed to ask the user
@@ -51,7 +49,7 @@ for the full spec) where each step's output feeds the next:
 ## Architecture
 
 ```
-static/index.html   Chat UI (matches health_agent_v2_updated.html exactly)
+static/index.html   Chat UI
         │  fetch('/api/chat' | '/api/select_clinic' | '/api/send_email' |
         │        '/api/check_reply' | '/api/confirm_booking')
         ▼
